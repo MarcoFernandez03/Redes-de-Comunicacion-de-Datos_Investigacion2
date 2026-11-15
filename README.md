@@ -39,6 +39,8 @@ Desarrollado y probado en la VM de Mininet con Ubuntu 20.04.1 LTS.
 | grpcio | 1.16.1 | Comunicación P4Runtime (gRPC) con los switches |
 | psutil | 5.5.1 | Lo exigen las utilidades del Makefile al levantar la red |
 | tcpdump | del sistema | Lectura de capturas en la prueba de descarte |
+| iperf | 2.x | Tráfico TCP para la prueba de flujo elefante del Lab 2 |
+| iptables | del sistema | Descarta respuestas del kernel de los hosts en el Lab 2 |
 | Utilidades del tutorial oficial de P4 | n/a | `utils/` (`run_exercise.py`, `p4runtime_lib`) |
 
 ### Instalación
@@ -226,7 +228,147 @@ Para el TTL=1, h3 debe reportar que no recibió ningún paquete.
 
 ## Laboratorio 2: Contadores y estadísticas de tráfico
 
-TODO
+Sistema de monitoreo de tráfico en el plano de datos P4, probado en Mininet con 1 switch P4 (`s1`) y 4 hosts que generan tráfico mixto. El switch enruta IPv4 y mide en el ingreso todo el tráfico que lo atraviesa. Un controlador en Python lee los contadores por P4Runtime y los imprime cada 5 segundos.
+
+### Archivos
+
+```text
+lab2-counters/
+├── counters.p4                 Programa P4: reenvío IPv4 + contadores, registers y detección de elefantes
+├── topology.py                 Topología (fuente única), compila y levanta la red
+├── topology.json               Generado por topology.py
+├── generate_runtime.py         Genera s1-runtime.json (rutas, flujos y umbral de elefante)
+├── s1-runtime.json             Entradas estáticas de las tablas de s1
+├── controller.py               Controlador: lectura periódica de contadores y registers
+├── Makefile                    Alternativa para compilar y levantar la red
+└── tests/
+    ├── util.py                 Funciones comunes
+    ├── generar_trafico.py      Inyecta tráfico con Scapy (cantidad y tamaño exactos)
+    ├── verificar.py            Compara los contadores contra lo inyectado
+    └── correr_pruebas.sh       Pruebas de exactitud y de flujo elefante
+```
+
+### Topología
+
+```text
+h1 ──┐
+h2 ──┤
+     ├── s1 (switch P4)
+h3 ──┤
+h4 ──┘
+```
+
+| Host | IP | Gateway (interfaz de s1) | Puerto de s1 |
+|---|---|---|---|
+| h1 | 10.0.1.1/24 | 10.0.1.254 | 1 |
+| h2 | 10.0.2.2/24 | 10.0.2.254 | 2 |
+| h3 | 10.0.3.3/24 | 10.0.3.254 | 3 |
+| h4 | 10.0.4.4/24 | 10.0.4.254 | 4 |
+
+Cada host está en su propia subred con ARP estático hacia su gateway, igual que en el Lab 1. `topology.py` también desactiva IPv6 en los hosts y agrega reglas `iptables` que descartan los ICMP *destination unreachable* y los TCP *RST* que generaría el kernel del destino. Así el tráfico sintético de las pruebas no produce respuestas que se sumen a los contadores.
+
+### Qué mide el programa P4
+
+| Requisito | Implementación en `counters.p4` |
+|---|---|
+| Contadores directos por flujo (IP origen + IP destino) | Tabla `flujos` (clave exacta `srcAddr`, `dstAddr`) con `direct_counter flujo_ctr` (paquetes y bytes). Hay una entrada por cada par ordenado de hosts (12). |
+| Contadores globales por protocolo | `counter proto_counter` indexado: 0 TCP, 1 UDP, 2 ICMP, 3 otros (IPv4 con otro protocolo), 4 no IPv4 (informativo). |
+| Tamaño de los paquetes con registers | `size_last` (último), `size_max` (máximo), `size_sum` (suma, para el promedio) y `size_hist`, un histograma de 5 cubetas: ≤64, 65-128, 129-512, 513-1024 y >1024 bytes. |
+| Detección de flujo elefante | `flujo_bytes` acumula bytes por flujo. Al llegar al umbral se marca `elefante_flag` (1) y el tráfico posterior de ese flujo se cuenta en `elefante_ctr`. El umbral es un parámetro de la acción `rastrear_flujo`, configurable desde el plano de control. |
+
+Detalles de medición:
+
+- Se cuenta en el **ingreso**, antes de decidir el reenvío: un paquete descartado (TTL agotado o sin ruta) también queda contado, porque llegó al switch.
+- El tamaño es `standard_metadata.packet_length`: bytes de la trama desde la cabecera Ethernet (sin FCS). Los contadores de bytes de BMv2 usan esa misma medida.
+- Los paquetes IPv4 cuyo par origen-destino no está en la tabla `flujos` se cuentan en `flujos_sin_entrada` (pero sí en el contador por protocolo).
+- Un mismo paquete se ve una vez por el contador global y una vez por el contador de su flujo; un ping genera dos flujos (solicitud y respuesta).
+
+### Cómo ejecutarlo
+
+Se usan tres terminales. Todos los comandos parten de la raíz del repositorio.
+
+**Terminal 1: levantar la red**
+
+```bash
+cd lab2-counters
+sudo python3 topology.py
+```
+
+Compila `counters.p4` (genera `build/counters.json` y el p4info), levanta la red en Mininet y carga las tablas de `s1` por P4Runtime. Al terminar abre la CLI de Mininet. Para comprobar la conectividad:
+
+```text
+mininet> pingall
+```
+
+Resultado esperado: `0% dropped (12/12 received)`.
+
+Alternativa con el Makefile del tutorial: `make run`.
+
+**Terminal 2: controlador (lectura periódica)**
+
+```bash
+cd lab2-counters
+python3 controller.py                  # imprime cada 5 s
+```
+
+Opciones útiles:
+
+| Opción | Efecto |
+|---|---|
+| `--intervalo 2` | Segundos entre lecturas (5 por defecto) |
+| `--umbral 500000` | Cambia en caliente el umbral de flujo elefante (bytes) en las 12 entradas |
+| `--todos` | Muestra también los flujos sin tráfico |
+| `--una-vez` | Una sola lectura |
+| `--snapshot a.json` | Guarda una lectura en JSON y termina (la usan las pruebas) |
+| `--muestras N` | Termina tras N lecturas |
+
+Cada lectura muestra: contadores por protocolo con los incrementos desde la lectura anterior, la tabla de flujos con paquetes, bytes y tasa (kbit/s), el tamaño de paquetes (último, máximo, promedio e histograma) y los flujos elefante. Cada flujo que se marca por primera vez produce una alerta y una línea en `logs/elefantes.log`.
+
+Para generar el tráfico a mano desde la CLI de Mininet (Terminal 1):
+
+```text
+mininet> h1 ping -c 5 h2
+mininet> h1 python3 tests/generar_trafico.py 10.0.3.3 --proto udp --count 50 --payload 300
+mininet> h4 iperf -s &
+mininet> h1 iperf -c 10.0.4.4 -t 10
+```
+
+**Terminal 3: pruebas automáticas**
+
+```bash
+cd lab2-counters
+sudo bash tests/correr_pruebas.sh        # todas
+sudo bash tests/correr_pruebas.sh fidelidad
+sudo bash tests/correr_pruebas.sh elefante
+```
+
+#### Prueba 1: los contadores reflejan el tráfico inyectado (`fidelidad`)
+
+Toma una lectura (`--snapshot`) antes y otra después de inyectar tráfico conocido, y `verificar.py` compara las diferencias:
+
+| Origen → destino | Protocolo | Paquetes | Bytes de datos | Trama Ethernet |
+|---|---|---|---|---|
+| h1 → h2 | ICMP echo | 10 (más 10 respuestas h2 → h1) | 100 | 142 B |
+| h1 → h3 | UDP | 20 | 200 | 242 B |
+| h3 → h1 | TCP | 25 | 500 | 554 B |
+| h4 → h2 | IP proto 253 (otros) | 5 | 50 | 84 B |
+| h2 → h3 | UDP | 8 | 1400 | 1442 B |
+
+Compara por flujo (paquetes y bytes), por protocolo, el histograma de tamaños y que el tamaño máximo sea al menos 1442 B. Salida esperada al final: `RESULTADO: TODO CORRECTO`.
+
+#### Prueba 2: detección de flujo elefante (`elefante`)
+
+Fija el umbral en 1 000 000 de bytes (`controller.py --umbral`), envía 3 pings h1 → h2 (flujo pequeño) y un `iperf` TCP de 5 s h1 → h4 (flujo grande). Espera que `10.0.1.1 -> 10.0.4.4` quede marcado como elefante y `10.0.1.1 -> 10.0.2.2` no. La marca y los bytes acumulados se leen de los registers.
+
+Si el controlador está corriendo en la Terminal 2 durante esta prueba, verá la alerta de nuevo flujo elefante y se escribe en `logs/elefantes.log`.
+
+### Notas y limitaciones
+
+- Los contadores y registers acumulan desde que arranca la red. Para empezar de cero, salir de Mininet (`exit`) y volver a ejecutar `topology.py`. La prueba de fidelidad usa diferencias entre dos lecturas, así que no necesita reiniciar. Los flujos elefante quedan marcados hasta reiniciar.
+- La prueba de fidelidad espera exactitud. Cualquier tráfico IPv4 extra de los hosts durante la prueba (por ejemplo un `ping` manual en paralelo) hará que `verificar.py` reporte diferencias.
+- Los registers se leen por P4Runtime. Si esa lectura falla, `controller.py` avisa y usa el cliente Thrift de BMv2 (`simple_switch_CLI --thrift-port 9090`).
+- Las reglas `iptables` de los hosts requieren que `iptables` esté instalado en la VM (viene con Ubuntu).
+- `iperf` (versión 2) debe estar instalado: `sudo apt install -y iperf`.
 
 ## Informe de investigación y video
 

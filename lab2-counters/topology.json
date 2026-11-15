@@ -1,0 +1,75 @@
+{
+  "hosts": {
+    "h1": {
+      "ip": "10.0.1.1/24",
+      "mac": "08:00:00:00:01:11",
+      "commands": [
+        "route add default gw 10.0.1.254 dev eth0",
+        "arp -i eth0 -s 10.0.1.254 08:00:00:00:01:00",
+        "sysctl -w net.ipv6.conf.all.disable_ipv6=1",
+        "sysctl -w net.ipv6.conf.default.disable_ipv6=1",
+        "iptables -A OUTPUT -p icmp --icmp-type destination-unreachable -j DROP",
+        "iptables -A OUTPUT -p tcp --tcp-flags RST RST -j DROP"
+      ]
+    },
+    "h2": {
+      "ip": "10.0.2.2/24",
+      "mac": "08:00:00:00:02:22",
+      "commands": [
+        "route add default gw 10.0.2.254 dev eth0",
+        "arp -i eth0 -s 10.0.2.254 08:00:00:00:02:00",
+        "sysctl -w net.ipv6.conf.all.disable_ipv6=1",
+        "sysctl -w net.ipv6.conf.default.disable_ipv6=1",
+        "iptables -A OUTPUT -p icmp --icmp-type destination-unreachable -j DROP",
+        "iptables -A OUTPUT -p tcp --tcp-flags RST RST -j DROP"
+      ]
+    },
+    "h3": {
+      "ip": "10.0.3.3/24",
+      "mac": "08:00:00:00:03:33",
+      "commands": [
+        "route add default gw 10.0.3.254 dev eth0",
+        "arp -i eth0 -s 10.0.3.254 08:00:00:00:03:00",
+        "sysctl -w net.ipv6.conf.all.disable_ipv6=1",
+        "sysctl -w net.ipv6.conf.default.disable_ipv6=1",
+        "iptables -A OUTPUT -p icmp --icmp-type destination-unreachable -j DROP",
+        "iptables -A OUTPUT -p tcp --tcp-flags RST RST -j DROP"
+      ]
+    },
+    "h4": {
+      "ip": "10.0.4.4/24",
+      "mac": "08:00:00:00:04:44",
+      "commands": [
+        "route add default gw 10.0.4.254 dev eth0",
+        "arp -i eth0 -s 10.0.4.254 08:00:00:00:04:00",
+        "sysctl -w net.ipv6.conf.all.disable_ipv6=1",
+        "sysctl -w net.ipv6.conf.default.disable_ipv6=1",
+        "iptables -A OUTPUT -p icmp --icmp-type destination-unreachable -j DROP",
+        "iptables -A OUTPUT -p tcp --tcp-flags RST RST -j DROP"
+      ]
+    }
+  },
+  "switches": {
+    "s1": {
+      "runtime_json": "s1-runtime.json"
+    }
+  },
+  "links": [
+    [
+      "h1",
+      "s1-p1"
+    ],
+    [
+      "h2",
+      "s1-p2"
+    ],
+    [
+      "h3",
+      "s1-p3"
+    ],
+    [
+      "h4",
+      "s1-p4"
+    ]
+  ]
+}
