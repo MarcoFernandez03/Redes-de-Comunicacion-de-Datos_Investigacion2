@@ -94,6 +94,36 @@
       "action_params": {
         "srcAddr": "08:00:00:02:03:00"
       }
+    },
+    {
+      "table": "MyIngress.icmp_src",
+      "match": {
+        "standard_metadata.ingress_port": 1
+      },
+      "action_name": "MyIngress.set_icmp_src",
+      "action_params": {
+        "ip": "10.0.2.254"
+      }
+    },
+    {
+      "table": "MyIngress.icmp_src",
+      "match": {
+        "standard_metadata.ingress_port": 2
+      },
+      "action_name": "MyIngress.set_icmp_src",
+      "action_params": {
+        "ip": "10.0.12.2"
+      }
+    },
+    {
+      "table": "MyIngress.icmp_src",
+      "match": {
+        "standard_metadata.ingress_port": 3
+      },
+      "action_name": "MyIngress.set_icmp_src",
+      "action_params": {
+        "ip": "10.0.23.1"
+      }
     }
   ]
 }

@@ -28,6 +28,13 @@ EGRESS = {
     "s3": {1: "08:00:00:00:03:01", 2: "08:00:00:00:03:02", 3: "08:00:00:03:02:00"},
 }
 
+# puerto de entrada -> IP de esa interfaz, origen de los ICMP Time Exceeded
+ICMP_SRC = {
+    "s1": {1: "10.0.1.254", 2:"10.0.12.1"},
+    "s2": {1: "10.0.2.254", 2: "10.0.12.2", 3: "10.0.23.1" },
+    "s3": {1: "10.0.3.254", 2: "10.0.4.254", 3: "10.0.23.2"}, 
+}
+
 for sw in ROUTES:
     entries = [{
         "table": "MyIngress.ipv4_lpm",
@@ -48,6 +55,13 @@ for sw in ROUTES:
             "match": {"standard_metadata.egress_port": port},
             "action_name": "MyEgress.set_src_mac",
             "action_params": {"srcAddr": mac}
+        })
+    for port, ip in ICMP_SRC[sw].items():
+        entries.append({
+            "table": "MyIngress.icmp_src",
+            "match": {"standard_metadata.ingress_port": port},
+            "action_name": "MyIngress.set_icmp_src",
+            "action_params": {"ip": ip}
         })
     out = {"target": "bmv2", "p4info": P4INFO, "bmv2_json": BMV2,
            "table_entries": entries}
