@@ -24,6 +24,7 @@ import time
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(BASE, '..', 'utils'))
+os.environ.setdefault('GRPC_ENABLE_FORK_SUPPORT', '0')
 
 from p4.v1 import p4runtime_pb2                       # noqa: E402
 from p4runtime_lib.helper import P4InfoHelper         # noqa: E402
@@ -59,8 +60,9 @@ class Switch(object):
         self.device_id = args.device_id
         self.sw = Bmv2SwitchConnection(name='s1', address=args.grpc,
                                        device_id=args.device_id)
-        self.sw.MasterArbitrationUpdate()
         self.stub = self.sw.client_stub
+        self.election_id = int(time.time())
+        self._primario = False
         self.usar_thrift = False
         self._ids_match = None
 
@@ -135,9 +137,22 @@ class Switch(object):
             res[self._clave_flujo(te.match)] = (
                 te.counter_data.packet_count, te.counter_data.byte_count)
         return res
+    
+    def _ser_primario(self):
+        """Arbitraje P4Runtime con un election id propio (necesario para escribir)."""
+        if self._primario:
+            return
+        req = p4runtime_pb2.StreamMessageRequest()
+        req.arbitration.device_id = self.device_id
+        req.arbitration.election_id.high = 0
+        req.arbitration.election_id.low = self.election_id
+        self.sw.requests_stream.put(req)
+        self.sw.dispatcher.arbitration_queue.get(timeout=10)
+        self._primario = True
 
     def fijar_umbral(self, umbral):
         """Modifica el umbral de elefante en todas las entradas de flujos."""
+        self._ser_primario()
         n = 0
         for (src, dst), (flow_id, _) in self.entradas_flujos().items():
             entrada = self.helper.buildTableEntry(
@@ -147,7 +162,7 @@ class Switch(object):
                 action_params={'flow_id': flow_id, 'umbral': umbral})
             req = p4runtime_pb2.WriteRequest()
             req.device_id = self.device_id
-            req.election_id.low = 1
+            req.election_id.low = self.election_id
             up = req.updates.add()
             up.type = p4runtime_pb2.Update.MODIFY
             up.entity.table_entry.CopyFrom(entrada)
@@ -345,9 +360,12 @@ def registrar_elefantes(m, previa, ruta):
             time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(m['timestamp'])),
             k.replace('>', ' -> '), f['bytes_registro'], f['paquetes'])
         print('[ALERTA] nuevo flujo elefante: ' + linea)
+        try: 
+            with open(ruta, 'a') as fh:
+                fh.write(linea + '\n')
+        except OSError as e:
+            print('[aviso] no se puede escribir %s (%s)' % (ruta, e))
         os.makedirs(os.path.dirname(ruta), exist_ok=True)
-        with open(ruta, 'a') as fh:
-            fh.write(linea + '\n')
 
 
 def main():
@@ -364,7 +382,7 @@ def main():
     ap.add_argument('--todos', action='store_true', help='mostrar tambien flujos sin trafico')
     ap.add_argument('--snapshot', help='guarda una lectura en este JSON y termina')
     ap.add_argument('--imprimir', action='store_true', help='con --snapshot, imprime tambien la tabla')
-    ap.add_argument('--log-elefantes', default=os.path.join(BASE, 'logs', 'elefantes.log'))
+    ap.add_argument('--log-elefantes', default=os.path.join(BASE, 'elefantes.log'))
     args = ap.parse_args()
 
     if not os.path.exists(args.p4info):
