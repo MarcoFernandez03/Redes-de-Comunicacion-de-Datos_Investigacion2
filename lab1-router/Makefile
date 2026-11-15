@@ -7,4 +7,4 @@ TOPO = topology.json
 include ../utils/Makefile
 
 test: dirs
-	./runptf.sh
+	./tests/correr_pruebas.sh
